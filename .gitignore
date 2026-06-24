@@ -1,0 +1,78 @@
+# ── 密钥与本地配置 ──
+.env
+.env.local
+.env.*.local
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.python-version
+
+# ── 测试与覆盖率 ──
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ── 项目运行时数据（不入库）──
+chroma_data/
+uploads/
+*.sqlite3
+*.sqlite3-journal
+*.db
+neo4j_data/
+kafka_data/
+logs/
+*.log
+
+# ── 模型缓存 ──
+.cache/
+.cache/torch/
+.cache/sentence_transformers/
+.cache/huggingface/
+models/
+
+# ── IDE / 编辑器 ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ── 操作系统 ──
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── 临时与备份 ──
+*.tmp
+*.bak
+*.orig
+*.rej
+.cache/
+tmp/
+
+# ── CodeBuddy ──
+.workbuddy/
