@@ -74,5 +74,9 @@ Thumbs.db
 .cache/
 tmp/
 
+# ── 项目内部文档（不入仓库）──
+AGENTS.md
+重构计划.md
+
 # ── CodeBuddy ──
 .workbuddy/
