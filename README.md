@@ -164,8 +164,3 @@ docker run -p 8080:8080 --env-file .env knowledgeforge
 
 > 注意：容器内不自带 Neo4j / ChromaDB 服务端，需要单独部署或用 docker-compose 编排（后续补）。
 
-## 相关文档
-
-- `AGENTS.md` — 重构行为准则（技术栈锁定、去 AI 味规则、禁止事项）
-- `重构计划.md` — 6 阶段执行计划 + 简历承诺兑现表
-- `HANDOFF.md` — 当前状态与交接说明
