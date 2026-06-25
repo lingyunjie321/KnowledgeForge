@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -26,6 +27,8 @@ class VectorStoreService:
         self._embeddings: Any = None
         self._store: Any = None
         self._backend = settings.vector_store_type
+        self._query_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._query_embedding_cache_size = 128
         # chromadb 的 C 扩展在 asyncio 事件循环里会 segfault，必须放到线程池
         self._executor = ThreadPoolExecutor(max_workers=2)
 
@@ -110,7 +113,7 @@ class VectorStoreService:
             return []
 
         if self._backend == "chroma":
-            query_vec = await self._run_sync(self.embeddings.embed_query, query)
+            query_vec = await self._embed_query_cached(query)
             raw = await self._run_sync(
                 self._store.query,
                 query_embeddings=[query_vec],
@@ -135,6 +138,18 @@ class VectorStoreService:
             ({"content": doc.page_content, "source": doc.metadata.get("source", ""), "metadata": doc.metadata}, score)
             for doc, score in results
         ]
+
+    async def _embed_query_cached(self, query: str) -> list[float]:
+        cached = self._query_embedding_cache.get(query)
+        if cached is not None:
+            self._query_embedding_cache.move_to_end(query)
+            return cached
+
+        query_vec = await self._run_sync(self.embeddings.embed_query, query)
+        self._query_embedding_cache[query] = query_vec
+        if len(self._query_embedding_cache) > self._query_embedding_cache_size:
+            self._query_embedding_cache.popitem(last=False)
+        return query_vec
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
         if self._backend == "chroma":

@@ -52,6 +52,40 @@ async def test_search_returns_metadata(deterministic_embeddings):
     assert doc["source"] == "readme.md"
 
 
+async def test_search_caches_query_embedding_only():
+    class CountingEmbeddings:
+        def __init__(self) -> None:
+            self.query_calls = 0
+
+        def embed_query(self, text: str) -> list[float]:
+            self.query_calls += 1
+            return [1.0, 0.0, 0.0]
+
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.query_calls = 0
+
+        def query(self, **_kwargs):
+            self.query_calls += 1
+            return {
+                "documents": [["命中内容"]],
+                "metadatas": [[{"doc_id": "d1", "chunk_id": "d1#chunk-0", "source": "a.txt"}]],
+                "distances": [[0.1]],
+            }
+
+    embeddings = CountingEmbeddings()
+    collection = FakeCollection()
+    vs = VectorStoreService()
+    vs._embeddings = embeddings
+    vs._store = collection
+
+    await vs.search("同一个问题", top_k=1)
+    await vs.search("同一个问题", top_k=1)
+
+    assert embeddings.query_calls == 1
+    assert collection.query_calls == 2
+
+
 async def test_delete_by_doc_id_removes_chunks(deterministic_embeddings):
     vs = _make_vs_with_embeddings(deterministic_embeddings)
     await vs.init()
