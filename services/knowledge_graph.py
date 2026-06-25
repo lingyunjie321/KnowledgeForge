@@ -66,6 +66,7 @@ class KnowledgeGraphService:
         ON MATCH SET
             e.description = CASE WHEN $description <> '' THEN $description ELSE e.description END,
             e.version = $version,
+            e.source = CASE WHEN $source <> '' THEN $source ELSE e.source END,
             e.updated_at = $now
         """
         async with self._driver.session() as session:
@@ -120,9 +121,12 @@ class KnowledgeGraphService:
         RETURN
             start.name AS source,
             [r IN relationships(path) | type(r)] AS relations,
+            [r IN relationships(path) | r.source] AS source_docs,
+            start.source AS source_doc,
             neighbor.name AS target,
             neighbor.type AS target_type,
-            neighbor.description AS target_desc
+            neighbor.description AS target_desc,
+            neighbor.source AS target_source
         LIMIT 50
         """
         return await self.execute_cypher(cypher, {"name": entity_name})

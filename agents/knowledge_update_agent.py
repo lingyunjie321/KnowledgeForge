@@ -215,13 +215,18 @@ class KnowledgeUpdateAgent:
 
         if self.knowledge_extractor and self.knowledge_graph:
             extractions = await self.knowledge_extractor.extract(chunks)
+            source_by_chunk = {
+                chunk.chunk_id: chunk.metadata.get("source", change.file_path)
+                for chunk in chunks
+            }
             for ext in extractions:
+                source = source_by_chunk.get(ext.source_chunk_id, change.file_path)
                 for ent in ext.entities:
                     version = self._bump_version(ent.name)
-                    await self.knowledge_graph.upsert_entity(ent, version=version)
+                    await self.knowledge_graph.upsert_entity(ent, version=version, source=source)
                     result.entities_added += 1
                 for rel in ext.relations:
-                    await self.knowledge_graph.add_relation(rel)
+                    await self.knowledge_graph.add_relation(rel, source=source)
                     result.relations_added += 1
 
     async def _handle_modify(self, change: DocumentChange, result: UpdateResult) -> None:

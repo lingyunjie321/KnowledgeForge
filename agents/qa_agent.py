@@ -117,7 +117,7 @@ class QAAgent:
             contexts = [
                 RetrievedContext(
                     content=c.content,
-                    source=c.source_type,
+                    source=self._context_source(c.metadata),
                     score=c.score,
                     retrieval_type=c.source_type,
                     metadata=c.metadata,
@@ -158,7 +158,7 @@ class QAAgent:
             contexts = [
                 RetrievedContext(
                     content=c.content,
-                    source=c.source_type,
+                    source=self._context_source(c.metadata),
                     score=c.score,
                     retrieval_type=c.source_type,
                     metadata=c.metadata,
@@ -183,7 +183,13 @@ class QAAgent:
             "reasoning_steps": reasoning_pre,
             "retrieve_steps": retrieve_steps,
             "sources": [
-                {"content": c.content[:200], "source": c.source, "score": c.score, "type": c.retrieval_type}
+                {
+                    "content": c.content[:200],
+                    "source": c.source,
+                    "score": c.score,
+                    "type": c.retrieval_type,
+                    "metadata": c.metadata,
+                }
                 for c in top_contexts
             ],
         }
@@ -242,6 +248,26 @@ class QAAgent:
                 seen.add(text)
                 items.append(text)
         return items
+
+    @staticmethod
+    def _context_source(metadata: dict[str, Any]) -> str:
+        source = metadata.get("source") or metadata.get("source_doc")
+        if source:
+            return str(source)
+
+        source_docs = metadata.get("source_docs")
+        if isinstance(source_docs, list):
+            for item in source_docs:
+                if item:
+                    return str(item)
+
+        doc_id = metadata.get("doc_id")
+        chunk_id = metadata.get("chunk_id")
+        if doc_id and chunk_id:
+            return f"{doc_id} / {chunk_id}"
+        if doc_id:
+            return str(doc_id)
+        return "未知来源"
 
     def _build_answer_messages(
         self,

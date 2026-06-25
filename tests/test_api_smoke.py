@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from api.main import app
+from agents.qa_agent import QAResult, QueryIntent, RetrievedContext
+from api.main import app, workflows
 
 
 def test_health_returns_ok():
@@ -44,6 +45,46 @@ def test_ask_question_returns_answer(mock_llm, fake_llm_response):
         assert body["intent"] == "factoid"
         assert isinstance(body["sources"], list)
         assert isinstance(body["reasoning_steps"], list)
+
+
+def test_ask_question_returns_source_metadata():
+    class FakeQAWorkflow:
+        async def ainvoke(self, state):
+            return {
+                "result": QAResult(
+                    question=state["question"],
+                    answer="答案",
+                    contexts=[
+                        RetrievedContext(
+                            content="命中内容",
+                            source="/docs/a.md",
+                            score=0.9,
+                            retrieval_type="vector",
+                            metadata={"doc_id": "doc1", "chunk_id": "doc1#chunk-0"},
+                        ),
+                    ],
+                    intent=QueryIntent.FACTOID,
+                    confidence=0.9,
+                    reasoning_steps=["答案生成完成"],
+                )
+            }
+
+    with TestClient(app) as client:
+        old_workflow = workflows.get("qa")
+        workflows["qa"] = FakeQAWorkflow()
+        try:
+            resp = client.post("/api/qa/ask", json={"question": "测试问题"})
+        finally:
+            if old_workflow is None:
+                workflows.pop("qa", None)
+            else:
+                workflows["qa"] = old_workflow
+
+    assert resp.status_code == 200
+    source = resp.json()["sources"][0]
+    assert source["type"] == "vector"
+    assert source["source"] == "/docs/a.md"
+    assert source["metadata"]["chunk_id"] == "doc1#chunk-0"
 
 
 def test_ask_rejects_missing_question_field():

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
-import { askStream, type QAMeta, type RetrieveStep } from '../api/qa'
+import { askStream, type QAMeta, type QASource, type RetrieveStep } from '../api/qa'
 
 interface ChatMessage {
   role: 'user' | 'agent'
@@ -88,6 +88,17 @@ const STEP_COLORS: Record<string, string> = {
 function totalCost(steps: RetrieveStep[] | undefined): number {
   if (!steps?.length) return 0
   return steps.reduce((sum, s) => sum + s.cost_ms, 0)
+}
+
+function metadataText(source: QASource): string {
+  const metadata = source.metadata ?? {}
+  const parts = ['doc_id', 'chunk_id', 'entity', 'from', 'to']
+    .map((key) => {
+      const value = metadata[key]
+      return typeof value === 'string' && value ? `${key}: ${value}` : ''
+    })
+    .filter(Boolean)
+  return parts.join(' · ')
 }
 </script>
 
@@ -189,6 +200,7 @@ function totalCost(steps: RetrieveStep[] | undefined): number {
                 <span class="ml-1 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{{ s.type }}</span>
                 <span class="ml-1 text-gray-400">{{ Math.round(s.score * 100) }}%</span>
                 <span class="ml-1 text-gray-700">{{ s.source }}</span>
+                <span v-if="metadataText(s)" class="ml-1 text-gray-400">{{ metadataText(s) }}</span>
               </li>
             </ul>
           </details>

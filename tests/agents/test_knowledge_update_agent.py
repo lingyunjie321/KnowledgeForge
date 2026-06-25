@@ -91,6 +91,36 @@ async def test_handle_create_calls_all_dependencies(fake_vector_store, fake_know
     assert "张三" in fake_knowledge_graph._entities
 
 
+async def test_handle_create_passes_source_to_knowledge_graph(fake_vector_store):
+    chunk = make_chunk("张三在 ACME 工作", doc_id="d1", source="/x/a.txt")
+    extraction = ExtractionResult(
+        entities=[Entity(name="张三", type="Person")],
+        relations=[Relation(head="张三", relation="works_at", tail="ACME")],
+        events=[],
+        source_chunk_id=chunk.chunk_id,
+    )
+    mock_parser = MagicMock()
+    mock_parser.parse = AsyncMock(return_value=[chunk])
+    mock_extractor = MagicMock()
+    mock_extractor.extract = AsyncMock(return_value=[extraction])
+    mock_kg = MagicMock()
+    mock_kg.upsert_entity = AsyncMock()
+    mock_kg.add_relation = AsyncMock()
+
+    agent = KnowledgeUpdateAgent(
+        doc_parser=mock_parser,
+        knowledge_extractor=mock_extractor,
+        vector_store=fake_vector_store,
+        knowledge_graph=mock_kg,
+    )
+
+    result = await agent.process_change(DocumentChange(file_path="/x/a.txt", change_type=ChangeType.CREATED))
+
+    assert result.success is True
+    assert mock_kg.upsert_entity.await_args.kwargs["source"] == "/x/a.txt"
+    assert mock_kg.add_relation.await_args.kwargs["source"] == "/x/a.txt"
+
+
 async def test_handle_modify_deletes_then_creates(fake_vector_store, fake_knowledge_graph):
     chunk = make_chunk("新内容", doc_id="d1")
     mock_parser = MagicMock()

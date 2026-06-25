@@ -83,15 +83,21 @@ def _build_ingest_graph(
 
     async def store_graph(state: dict) -> dict:
         extractions = state.get("extractions", [])
+        chunks = state.get("chunks", [])
+        source_by_chunk = {
+            chunk.chunk_id: chunk.metadata.get("source", "")
+            for chunk in chunks
+        }
         entity_count = 0
         if knowledge_graph:
             try:
                 for ext in extractions:
+                    source = source_by_chunk.get(ext.source_chunk_id, "")
                     for ent in ext.entities:
-                        await knowledge_graph.upsert_entity(ent)
+                        await knowledge_graph.upsert_entity(ent, source=source)
                         entity_count += 1
                     for rel in ext.relations:
-                        await knowledge_graph.add_relation(rel)
+                        await knowledge_graph.add_relation(rel, source=source)
             except Exception:
                 logger.exception("图谱写入失败，部分实体/关系丢失")
         return {**state, "entities_stored": entity_count}

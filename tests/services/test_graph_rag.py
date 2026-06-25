@@ -69,7 +69,7 @@ async def test_path_search_uses_parameterized_cypher(mock_llm):
     # 验证 Cypher 用 $name_a/$name_b 参数化，不拼字符串，且 params 传入正确
     mock_kg = MagicMock()
     mock_kg.execute_cypher = AsyncMock(return_value=[
-        {"node_names": ["张三", "ACME"], "rel_types": ["WORKS_AT"]},
+        {"node_names": ["张三", "ACME"], "rel_types": ["WORKS_AT"], "source_docs": ["/docs/a.md"]},
     ])
     mock_vs = MagicMock()
     pipeline = GraphRAGPipeline(vector_store=mock_vs, knowledge_graph=mock_kg)
@@ -79,6 +79,8 @@ async def test_path_search_uses_parameterized_cypher(mock_llm):
     assert len(contexts) == 1
     assert contexts[0].source_type == "path"
     assert "张三" in contexts[0].content and "ACME" in contexts[0].content
+    assert contexts[0].metadata["source"] == "/docs/a.md"
+    assert contexts[0].metadata["source_docs"] == ["/docs/a.md"]
     mock_kg.execute_cypher.assert_awaited_once()
     call_args = mock_kg.execute_cypher.call_args
     cypher = call_args.args[0]
@@ -102,7 +104,8 @@ async def test_subgraph_search_builds_content(mock_llm):
     mock_kg = MagicMock()
     mock_kg.get_neighbors = AsyncMock(return_value=[
         {"source": "张三", "relations": ["WORKS_AT"], "target": "ACME",
-         "target_type": "Organization", "target_desc": "科技公司"},
+         "target_type": "Organization", "target_desc": "科技公司",
+         "source_docs": ["/docs/a.md"]},
     ])
     pipeline = GraphRAGPipeline(vector_store=MagicMock(), knowledge_graph=mock_kg)
 
@@ -112,6 +115,8 @@ async def test_subgraph_search_builds_content(mock_llm):
     assert contexts[0].source_type == "subgraph"
     assert "张三" in contexts[0].content and "ACME" in contexts[0].content
     assert "WORKS_AT" in contexts[0].content
+    assert contexts[0].metadata["source"] == "/docs/a.md"
+    assert contexts[0].metadata["source_docs"] == ["/docs/a.md"]
 
 
 async def test_retrieve_uses_vector_queries_and_deduplicates(mock_llm, fake_llm_response):

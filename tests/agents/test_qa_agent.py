@@ -79,6 +79,30 @@ async def test_answer_full_flow_with_mock_graph_rag(mock_llm, fake_llm_response)
     assert mock_rag.retrieve.await_count == 1
 
 
+async def test_answer_uses_real_source_from_metadata(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("factoid"),
+        fake_llm_response('{"queries": ["q"], "entities": [], "keywords": []}'),
+        fake_llm_response("答案"),
+    ]
+    mock_rag = MagicMock()
+    mock_rag.retrieve = AsyncMock(return_value=[
+        GraphRAGContext(
+            content="向量命中",
+            source_type="vector",
+            score=0.9,
+            metadata={"source": "/docs/a.md", "doc_id": "doc1", "chunk_id": "doc1#chunk-0"},
+        ),
+    ])
+
+    agent = QAAgent(graph_rag=mock_rag)
+    result = await agent.answer("问题")
+
+    assert result.contexts[0].source == "/docs/a.md"
+    assert result.contexts[0].retrieval_type == "vector"
+    assert result.contexts[0].metadata["chunk_id"] == "doc1#chunk-0"
+
+
 async def test_answer_passes_rewrite_result_to_graph_rag(mock_llm, fake_llm_response):
     mock_llm.ainvoke.side_effect = [
         fake_llm_response("factoid"),
@@ -134,7 +158,12 @@ async def test_answer_stream_yields_meta_then_tokens_then_done(mock_llm, fake_ll
     mock_llm.astream_text = "流式答案"
     mock_rag = MagicMock()
     mock_rag.retrieve = AsyncMock(return_value=[
-        GraphRAGContext(content="命中", source_type="vector", score=0.9),
+        GraphRAGContext(
+            content="命中",
+            source_type="vector",
+            score=0.9,
+            metadata={"source": "/docs/a.md", "doc_id": "doc1", "chunk_id": "doc1#chunk-0"},
+        ),
     ])
     agent = QAAgent(graph_rag=mock_rag)
 
@@ -146,6 +175,8 @@ async def test_answer_stream_yields_meta_then_tokens_then_done(mock_llm, fake_ll
     assert events[0]["intent"] == "analytical"
     assert events[0]["confidence"] > 0
     assert len(events[0]["sources"]) == 1
+    assert events[0]["sources"][0]["source"] == "/docs/a.md"
+    assert events[0]["sources"][0]["metadata"]["chunk_id"] == "doc1#chunk-0"
     assert "识别问题意图" in events[0]["reasoning_steps"][0]
 
     token_events = [e for e in events if e["type"] == "token"]

@@ -183,7 +183,13 @@ async def ask_question(req: QuestionRequest):
         confidence=qa_result.confidence,
         intent=qa_result.intent.value,
         sources=[
-            {"content": c.content[:200], "source": c.source, "score": c.score, "type": c.retrieval_type}
+            {
+                "content": c.content[:200],
+                "source": c.source,
+                "score": c.score,
+                "type": c.retrieval_type,
+                "metadata": c.metadata,
+            }
             for c in qa_result.contexts
         ],
         reasoning_steps=qa_result.reasoning_steps,

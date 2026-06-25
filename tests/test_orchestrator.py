@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agents.knowledge_extract_agent import Entity, ExtractionResult, Relation
 from agents.qa_agent import QAResult, QueryIntent
-from orchestrator.graph import _build_qa_graph, build_knowledge_graph_workflow
+from orchestrator.graph import _build_ingest_graph, _build_qa_graph, build_knowledge_graph_workflow
+from tests.conftest import make_chunk
 
 
 def test_build_workflow_returns_three_graphs(mock_llm, fake_vector_store, fake_knowledge_graph):
@@ -60,6 +62,29 @@ async def test_ingest_workflow_runs_end_to_end(mock_llm, fake_llm_response, tmp_
     # 无 vector_store/kg，store 步骤产出 0
     assert result.get("vectors_stored", 0) == 0
     assert result.get("entities_stored", 0) == 0
+
+
+async def test_ingest_workflow_writes_graph_source_from_chunk_metadata():
+    chunk = make_chunk("张三在 ACME 工作", doc_id="doc1", source="/docs/a.md")
+    extraction = ExtractionResult(
+        entities=[Entity(name="张三", type="Person")],
+        relations=[Relation(head="张三", relation="works_at", tail="ACME")],
+        events=[],
+        source_chunk_id=chunk.chunk_id,
+    )
+    mock_parser = MagicMock()
+    mock_parser.parse_batch = AsyncMock(return_value=[chunk])
+    mock_extractor = MagicMock()
+    mock_extractor.extract = AsyncMock(return_value=[extraction])
+    mock_kg = MagicMock()
+    mock_kg.upsert_entity = AsyncMock()
+    mock_kg.add_relation = AsyncMock()
+
+    graph = _build_ingest_graph(mock_parser, mock_extractor, vector_store=None, knowledge_graph=mock_kg)
+    await graph.ainvoke({"file_paths": ["/docs/a.md"]})
+
+    assert mock_kg.upsert_entity.await_args.kwargs["source"] == "/docs/a.md"
+    assert mock_kg.add_relation.await_args.kwargs["source"] == "/docs/a.md"
 
 
 async def test_update_workflow_processes_changes():

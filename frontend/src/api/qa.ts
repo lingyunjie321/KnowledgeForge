@@ -3,6 +3,7 @@ export interface QASource {
   source: string
   score: number
   type: string
+  metadata?: Record<string, unknown>
 }
 
 export interface RetrieveStep {

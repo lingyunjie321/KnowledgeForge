@@ -160,22 +160,28 @@ class GraphRAGPipeline:
 
     async def _vector_search(self, query: str, top_k: int = 5) -> list[GraphRAGContext]:
         results = await self.vector_store.search(query, top_k=top_k)
-        return [
-            GraphRAGContext(
+        contexts: list[GraphRAGContext] = []
+        for doc, score in results:
+            metadata = dict(doc.get("metadata", {}))
+            source = metadata.get("source") or doc.get("source", "")
+            if source:
+                metadata["source"] = source
+            contexts.append(GraphRAGContext(
                 content=doc["content"],
                 source_type="vector",
                 score=score,
-                doc_type=doc.get("metadata", {}).get("doc_type", DocType.TEXT.value),
-                metadata=doc.get("metadata", {}),
-            )
-            for doc, score in results
-        ]
+                doc_type=metadata.get("doc_type", DocType.TEXT.value),
+                metadata=metadata,
+            ))
+        return contexts
 
     @staticmethod
-    def _merge_unique(values: list[str]) -> list[str]:
+    def _merge_unique(values: list[Any]) -> list[str]:
         items: list[str] = []
         seen: set[str] = set()
         for value in values:
+            if value is None:
+                continue
             text = str(value).strip()
             if text and text not in seen:
                 seen.add(text)
@@ -215,6 +221,10 @@ class GraphRAGPipeline:
         for entity_name in entities:
             neighbors = await self.knowledge_graph.get_neighbors(entity_name, hops=hops)
             for record in neighbors:
+                source_docs = self._record_sources(record)
+                metadata = {"entity": entity_name, "hops": hops, "source_docs": source_docs}
+                if source_docs:
+                    metadata["source"] = source_docs[0]
                 content = (
                     f"{record.get('source', '')} "
                     f"--[{', '.join(record.get('relations', []))}]--> "
@@ -226,7 +236,7 @@ class GraphRAGPipeline:
                     content=content,
                     source_type="subgraph",
                     score=0.75,
-                    metadata={"entity": entity_name, "hops": hops},
+                    metadata=metadata,
                 ))
         return contexts
 
@@ -244,7 +254,8 @@ class GraphRAGPipeline:
                 )
                 RETURN
                     [n IN nodes(path) | n.name] AS node_names,
-                    [r IN relationships(path) | type(r)] AS rel_types
+                    [r IN relationships(path) | type(r)] AS rel_types,
+                    [r IN relationships(path) | r.source] AS source_docs
                 LIMIT 3
                 """
                 try:
@@ -259,11 +270,20 @@ class GraphRAGPipeline:
                             path_str += node
                             if k < len(rels):
                                 path_str += f" --[{rels[k]}]--> "
+                        source_docs = self._record_sources(rec)
+                        metadata = {
+                            "from": entities[i],
+                            "to": entities[j],
+                            "path": nodes,
+                            "source_docs": source_docs,
+                        }
+                        if source_docs:
+                            metadata["source"] = source_docs[0]
                         contexts.append(GraphRAGContext(
                             content=f"推理路径: {path_str}",
                             source_type="path",
                             score=0.85,
-                            metadata={"from": entities[i], "to": entities[j]},
+                            metadata=metadata,
                         ))
                 except Exception:
                     logger.exception("路径检索失败: %s → %s", entities[i], entities[j])
@@ -277,12 +297,34 @@ class GraphRAGPipeline:
             HumanMessage(content=f"子图信息:\n{subgraph_text}"),
         ]
         resp = await self.llm.ainvoke(messages)
+        source_docs = self._merge_unique([
+            source
+            for result in subgraph_results
+            for source in result.metadata.get("source_docs", [])
+        ])
+        metadata: dict[str, Any] = {"type": "community_summary", "source_docs": source_docs}
+        if source_docs:
+            metadata["source"] = source_docs[0]
         return GraphRAGContext(
             content=resp.content,
             source_type="community",
             score=0.9,
-            metadata={"type": "community_summary"},
+            metadata=metadata,
         )
+
+    @classmethod
+    def _record_sources(cls, record: dict) -> list[str]:
+        values: list[str] = []
+        raw = record.get("source_docs", [])
+        if isinstance(raw, list):
+            values.extend(raw)
+        elif raw:
+            values.append(raw)
+        for key in ("source_doc", "target_source"):
+            value = record.get(key)
+            if value:
+                values.append(value)
+        return cls._merge_unique(values)
 
     @staticmethod
     def _cross_rerank(contexts: list[GraphRAGContext], query: str) -> list[GraphRAGContext]:
