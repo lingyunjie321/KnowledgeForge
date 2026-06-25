@@ -4,12 +4,13 @@
 
 ## 技术栈
 
-- Python 3.12 + FastAPI + LangGraph + LangChain
+- 后端：Python 3.12 + FastAPI + LangGraph + LangChain
 - 向量库：ChromaDB（主）/ PGVector（备）
 - 图库：Neo4j
 - LLM：DeepSeek（OpenAI API 兼容）
 - Embedding：三档可切换（local BGE-M3 子进程 / api OpenAI 兼容 / disabled 零向量）
 - CDC：Watchdog 监听本地文件 / Kafka 消费数据库变更
+- 前端：Vue 3 + Vite + TypeScript + Tailwind CSS
 
 ## 目录结构
 
@@ -30,13 +31,19 @@
 │   └── embedding_worker.py        # local 档子进程 worker
 ├── api/                     # FastAPI 入口
 ├── config/                  # 配置（pydantic-settings）
+├── frontend/                # Vue 3 前端（Vite + TS + Tailwind）
+│   ├── src/
+│   │   ├── api/                   # 类型化 API 调用
+│   │   ├── views/                 # QA / Graph / Upload / Update / Dashboard
+│   │   ├── router/
+│   │   └── App.vue
+│   └── dist/                      # 构建产物，FastAPI 直接挂载
 ├── tests/                   # 单测 + 评测脚本 + 基准脚本
 │   ├── agents/                    # 4 个 Agent 单测
 │   ├── services/                  # vector_store / graph_rag / cdc_processor 单测
 │   ├── eval/f1_compare.py         # 纯向量 vs GraphRAG F1 对比
 │   ├── bench/update_benchmark.py  # 全量重建 vs CDC 增量基准
 │   └── ...
-├── static/                  # 前端页面
 ├── Dockerfile
 ├── requirements.txt
 └── pytest.ini
@@ -78,13 +85,26 @@ cp .env.example .env
 
 ### 3. 启动服务
 
+**开发模式**（前后端分离，前端热更新）：
+
 ```bash
-python -m api.main
-# 或
-uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
+# 终端 1：后端
+EMBEDDING_PROVIDER=disabled uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 终端 2：前端（Vite dev server，自动代理 /api 到 8000）
+cd frontend && npm run dev
 ```
 
-打开 `http://localhost:8080` 访问前端，或直接调用 API。
+打开 `http://localhost:5173`，前端改动热更新，后端 API 走 Vite 代理。
+
+**生产模式**（构建后单端口）：
+
+```bash
+cd frontend && npm run build      # 产物到 frontend/dist/
+cd .. && uvicorn api.main:app --host 0.0.0.0 --port 8080
+```
+
+打开 `http://localhost:8080`，FastAPI 直接挂载 `frontend/dist/`，SPA history fallback 由后端处理。
 
 ## API 端点
 
@@ -92,9 +112,11 @@ uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/admin/stats` | 向量库 + 图谱统计 |
+| GET | `/api/graph/data` | 图谱实体+关系（前端可视化用） |
 | POST | `/api/ingest/upload` | 上传单文档入库 |
 | POST | `/api/ingest/batch` | 批量上传 |
-| POST | `/api/qa/ask` | 智能问答 |
+| POST | `/api/qa/ask` | 智能问答（非流式，JSON 响应） |
+| POST | `/api/qa/ask_stream` | 智能问答（SSE 流式，meta→token→done） |
 | POST | `/api/admin/update` | 触发增量更新 |
 
 ## 测试与评测
@@ -105,7 +127,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
 EMBEDDING_PROVIDER=disabled pytest tests/ -v
 ```
 
-覆盖 4 个 Agent、3 个核心 service、orchestrator 编排、API 端到端 smoke test（83 个测试）。
+覆盖 4 个 Agent、3 个核心 service、orchestrator 编排、API 端到端 smoke test（87 个测试，含 SSE 流式协议验证）。
 
 ### F1 评测（纯向量 RAG vs GraphRAG）
 

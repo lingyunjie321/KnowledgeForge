@@ -23,7 +23,9 @@ onMounted(() => {
 const navItems = [
   { to: '/qa', label: '智能问答' },
   { to: '/graph', label: '知识图谱' },
+  { to: '/upload', label: '文档入库' },
   { to: '/update', label: '增量更新' },
+  { to: '/dashboard', label: '系统概览' },
 ]
 </script>
 

@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -60,14 +60,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+# 前端构建产物：优先用 frontend/dist，dev 模式下没有就回退到旧 static
+_frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+_static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+static_dir = _frontend_dist if os.path.isdir(_frontend_dist) else _static_dir
 os.makedirs(static_dir, exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+os.makedirs(os.path.join(static_dir, "assets"), exist_ok=True)
+app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+
+
+def frontend_index_response():
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'><title>KnowledgeForge</title>"
+        "<p>前端未构建，请运行 npm run build 或使用 Vite dev server。</p>"
+    )
 
 
 @app.get("/")
 async def serve_frontend():
-    return FileResponse(os.path.join(static_dir, "index.html"))
+    return frontend_index_response()
 
 
 class QuestionRequest(BaseModel):
@@ -265,7 +279,17 @@ async def health():
     return {"status": "ok", "service": "knowledgeforge"}
 
 
+@app.get("/{path:path}", tags=["前端"])
+async def spa_fallback(path: str):
+    """SPA history fallback：非 /api 路径且未匹配的返回 index.html，让 Vue Router 接管"""
+    if path.startswith("api/"):
+        raise HTTPException(status_code=404)
+    candidate = os.path.join(static_dir, path)
+    if os.path.isfile(candidate):
+        return FileResponse(candidate)
+    return frontend_index_response()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api.main:app", host=settings.api_host, port=settings.api_port, reload=True)
-
