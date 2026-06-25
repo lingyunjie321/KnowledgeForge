@@ -1,9 +1,18 @@
+export interface UpdateDiff {
+  added_count?: number
+  removed_count?: number
+  change_ratio?: number
+  is_major_change?: boolean
+  affected_chunks?: string[]
+}
+
 export interface UpdateResult {
   file_path: string
   vectors_added: number
   vectors_deleted: number
   entities_added: number
   relations_added: number
+  diff: UpdateDiff
   success: boolean
   processing_time_ms: number
 }

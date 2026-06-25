@@ -34,7 +34,7 @@ async function submit() {
     <div class="mb-6">
       <h2 class="text-lg font-medium text-gray-900">CDC 增量更新</h2>
       <p class="text-sm text-gray-500 mt-0.5">
-        指定文件变更触发增量同步：差量 &lt; 30% 走增量，&ge; 30% 触发全量重建
+        当前手动触发 created / modified / deleted；modified 无快照时删旧建新，带快照时按 30% diff 选择 chunk 增量或全量重建
       </p>
     </div>
 
@@ -113,6 +113,18 @@ async function submit() {
           <div class="text-xs text-emerald-700">新增关系</div>
           <div class="text-lg font-medium text-emerald-900 mt-0.5">+{{ result.relations_added }}</div>
         </div>
+      </div>
+      <div
+        v-if="result.diff && Object.keys(result.diff).length"
+        class="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600"
+      >
+        <span>diff {{ Math.round((result.diff.change_ratio ?? 0) * 100) }}%</span>
+        <span class="ml-2">{{ result.diff.is_major_change ? '全量重建' : 'chunk 增量' }}</span>
+        <span class="ml-2">新增 {{ result.diff.added_count ?? 0 }}</span>
+        <span class="ml-2">删除 {{ result.diff.removed_count ?? 0 }}</span>
+        <span v-if="result.diff.affected_chunks?.length" class="ml-2">
+          chunk {{ result.diff.affected_chunks.length }}
+        </span>
       </div>
     </div>
   </div>

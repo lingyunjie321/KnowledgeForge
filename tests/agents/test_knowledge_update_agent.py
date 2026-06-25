@@ -47,6 +47,8 @@ def test_detect_changes_modified_file(tmp_path):
     assert len(changes) == 1
     assert changes[0].change_type is ChangeType.MODIFIED
     assert changes[0].old_hash != changes[0].new_hash
+    assert changes[0].before_content == "v1"
+    assert changes[0].after_content == "v2-changed"
 
 
 def test_detect_changes_deleted_file(tmp_path):
@@ -142,6 +144,92 @@ async def test_handle_modify_deletes_then_creates(fake_vector_store, fake_knowle
     assert len(fake_vector_store.delete_calls) == 1
     assert result.vectors_added == 1
     assert result.vectors_deleted == 0
+
+
+async def test_handle_modify_with_minor_diff_updates_affected_chunks():
+    before = "\n".join(f"line{i}" for i in range(20))
+    after = before + "\n新增知识"
+    unchanged = make_chunk("line0\nline1", doc_id="d1", chunk_index=0, source="/x/a.txt")
+    changed = make_chunk("新增知识", doc_id="d1", chunk_index=1, source="/x/a.txt")
+    extraction = ExtractionResult(
+        entities=[Entity(name="新增知识", type="Concept")],
+        relations=[],
+        events=[],
+        source_chunk_id=changed.chunk_id,
+    )
+    mock_parser = MagicMock()
+    mock_parser.parse = AsyncMock(return_value=[unchanged, changed])
+    mock_extractor = MagicMock()
+    mock_extractor.extract = AsyncMock(return_value=[extraction])
+    mock_vs = MagicMock()
+    mock_vs.delete_by_doc_id = AsyncMock()
+    mock_vs.delete_chunks = AsyncMock(return_value=1)
+    mock_vs.add_chunks = AsyncMock(return_value=1)
+    mock_kg = MagicMock()
+    mock_kg.upsert_entity = AsyncMock()
+    mock_kg.add_relation = AsyncMock()
+
+    agent = KnowledgeUpdateAgent(
+        doc_parser=mock_parser,
+        knowledge_extractor=mock_extractor,
+        vector_store=mock_vs,
+        knowledge_graph=mock_kg,
+    )
+
+    change = DocumentChange(
+        file_path="/x/a.txt",
+        change_type=ChangeType.MODIFIED,
+        before_content=before,
+        after_content=after,
+    )
+    result = await agent.process_change(change)
+
+    assert result.success is True
+    assert result.diff["is_major_change"] is False
+    mock_vs.delete_by_doc_id.assert_not_awaited()
+    mock_vs.delete_chunks.assert_awaited_once_with([changed.chunk_id])
+    mock_vs.add_chunks.assert_awaited_once_with([changed])
+    mock_extractor.extract.assert_awaited_once_with([changed])
+    assert result.vectors_deleted == 1
+    assert result.vectors_added == 1
+    assert result.entities_added == 1
+
+
+async def test_handle_modify_with_major_diff_deletes_then_creates():
+    before = "a\nb\nc"
+    after = "x\ny\nz\nw"
+    chunk = make_chunk("新内容", doc_id="d1", source="/x/a.txt")
+    mock_parser = MagicMock()
+    mock_parser.parse = AsyncMock(return_value=[chunk])
+    mock_extractor = MagicMock()
+    mock_extractor.extract = AsyncMock(return_value=[])
+    mock_vs = MagicMock()
+    mock_vs.delete_by_doc_id = AsyncMock(return_value=2)
+    mock_vs.add_chunks = AsyncMock(return_value=1)
+    mock_kg = MagicMock()
+    mock_kg.upsert_entity = AsyncMock()
+    mock_kg.add_relation = AsyncMock()
+
+    agent = KnowledgeUpdateAgent(
+        doc_parser=mock_parser,
+        knowledge_extractor=mock_extractor,
+        vector_store=mock_vs,
+        knowledge_graph=mock_kg,
+    )
+
+    result = await agent.process_change(DocumentChange(
+        file_path="/x/a.txt",
+        change_type=ChangeType.MODIFIED,
+        before_content=before,
+        after_content=after,
+    ))
+
+    assert result.success is True
+    assert result.diff["is_major_change"] is True
+    mock_vs.delete_by_doc_id.assert_awaited_once()
+    mock_vs.add_chunks.assert_awaited_once_with([chunk])
+    assert result.vectors_deleted == 2
+    assert result.vectors_added == 1
 
 
 async def test_handle_delete_removes_from_stores(fake_vector_store, fake_knowledge_graph):

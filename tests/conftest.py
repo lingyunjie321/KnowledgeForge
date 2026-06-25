@@ -95,6 +95,7 @@ class FakeVectorStore:
         self._preset_results: list[tuple[dict, float]] = []
         self.add_calls: int = 0
         self.delete_calls: list[str] = []
+        self.delete_chunk_calls: list[list[str]] = []
 
     def set_search_results(self, results: list[tuple[dict, float]]) -> None:
         self._preset_results = results
@@ -117,6 +118,13 @@ class FakeVectorStore:
         for k in ids:
             del self._chunks[k]
         return len(ids)
+
+    async def delete_chunks(self, chunk_ids: list[str]) -> int:
+        self.delete_chunk_calls.append(chunk_ids)
+        found = [chunk_id for chunk_id in chunk_ids if chunk_id in self._chunks]
+        for chunk_id in found:
+            del self._chunks[chunk_id]
+        return len(found)
 
     async def get_stats(self) -> dict:
         return {"backend": "fake", "total_vectors": len(self._chunks)}

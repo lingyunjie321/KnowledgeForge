@@ -145,6 +145,17 @@ class VectorStoreService:
             return len(ids)
         return 0
 
+    async def delete_chunks(self, chunk_ids: list[str]) -> int:
+        if not chunk_ids:
+            return 0
+        if self._backend == "chroma":
+            existing = await self._run_sync(self._store.get, ids=chunk_ids, include=[])
+            ids = existing.get("ids", [])
+            if ids:
+                await self._run_sync(self._store.delete, ids=ids)
+            return len(ids)
+        return 0
+
     async def get_stats(self) -> dict:
         if self._backend == "chroma":
             if self._store is None:

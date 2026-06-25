@@ -152,6 +152,8 @@ BENCH_DOC_COUNT=100 python -m tests.bench.update_benchmark
 
 对比全量重建与 CDC 增量更新的耗时、吞吐和效率提升。
 
+当前 `/api/admin/update` 手动触发只传文件路径和变更类型；`modified` 没有 before/after 快照时会回退为删旧建新。`DocumentChange` 带文本快照或 chunk hash 快照时，`KnowledgeUpdateAgent` 会调用 `CDCProcessor.compute_diff()`：小于等于 30% 的改动只重写受影响 chunk，超过 30% 走删旧建新。
+
 ## Embedding 三档策略
 
 通过 `EMBEDDING_PROVIDER` 切换，上层检索逻辑无感知，只改 `.env` 不改代码：
@@ -185,4 +187,3 @@ docker run -p 8080:8080 --env-file .env knowledgeforge
 ```
 
 > 注意：容器内不自带 Neo4j / ChromaDB 服务端，需要单独部署或用 docker-compose 编排（后续补）。
-

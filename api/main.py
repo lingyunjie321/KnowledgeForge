@@ -113,6 +113,8 @@ class StatsResponse(BaseModel):
 class UpdateRequest(BaseModel):
     file_path: str
     change_type: str = "modified"
+    before_content: str = ""
+    after_content: str = ""
 
 
 class UpdateResponse(BaseModel):
@@ -121,6 +123,7 @@ class UpdateResponse(BaseModel):
     vectors_deleted: int
     entities_added: int
     relations_added: int
+    diff: dict[str, Any]
     success: bool
     processing_time_ms: float
 
@@ -262,6 +265,8 @@ async def trigger_update(req: UpdateRequest):
     change = DocumentChange(
         file_path=req.file_path,
         change_type=ChangeType(req.change_type),
+        before_content=req.before_content,
+        after_content=req.after_content,
     )
     result = await update_wf.ainvoke({"changes": [change]})
     results = result.get("results", [])
@@ -275,6 +280,7 @@ async def trigger_update(req: UpdateRequest):
         vectors_deleted=r.vectors_deleted,
         entities_added=r.entities_added,
         relations_added=r.relations_added,
+        diff=r.diff,
         success=r.success,
         processing_time_ms=r.processing_time_ms,
     )
