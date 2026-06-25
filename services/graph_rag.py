@@ -84,18 +84,24 @@ class GraphRAGPipeline:
         query: str,
         top_k: int = 10,
         steps: list[RetrieveStep] | None = None,
+        vector_queries: list[str] | None = None,
+        entities_hint: list[str] | None = None,
     ) -> list[GraphRAGContext]:
         steps = steps if steps is not None else []
 
         t0 = time.perf_counter()
-        vector_results = await self._vector_search(query, top_k=top_k)
+        search_queries = self._merge_unique(vector_queries or [query])
+        vector_results = await self._vector_search_many(search_queries, top_k=top_k)
         steps.append(RetrieveStep(
             name="vector", label=_SIX_STEP_LABELS["vector"],
             hits=len(vector_results), cost_ms=int((time.perf_counter() - t0) * 1000),
         ))
 
         t0 = time.perf_counter()
-        entities = await self._entity_linking(query)
+        entities = self._merge_unique([
+            *(entities_hint or []),
+            *(await self._entity_linking(query)),
+        ])
         steps.append(RetrieveStep(
             name="entity_linking", label=_SIX_STEP_LABELS["entity_linking"],
             hits=len(entities), cost_ms=int((time.perf_counter() - t0) * 1000),
@@ -138,6 +144,20 @@ class GraphRAGPipeline:
 
         return reranked[:top_k]
 
+    async def _vector_search_many(self, queries: list[str], top_k: int = 5) -> list[GraphRAGContext]:
+        contexts: list[GraphRAGContext] = []
+        for query in queries:
+            contexts.extend(await self._vector_search(query, top_k=top_k))
+
+        seen: set[str] = set()
+        unique: list[GraphRAGContext] = []
+        for ctx in contexts:
+            key = self._context_key(ctx)
+            if key not in seen:
+                seen.add(key)
+                unique.append(ctx)
+        return unique
+
     async def _vector_search(self, query: str, top_k: int = 5) -> list[GraphRAGContext]:
         results = await self.vector_store.search(query, top_k=top_k)
         return [
@@ -150,6 +170,30 @@ class GraphRAGPipeline:
             )
             for doc, score in results
         ]
+
+    @staticmethod
+    def _merge_unique(values: list[str]) -> list[str]:
+        items: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value).strip()
+            if text and text not in seen:
+                seen.add(text)
+                items.append(text)
+        return items
+
+    @staticmethod
+    def _context_key(ctx: GraphRAGContext) -> str:
+        metadata = ctx.metadata
+        for key in ("chunk_id", "id"):
+            value = metadata.get(key)
+            if value:
+                return f"{key}:{value}"
+        doc_id = metadata.get("doc_id")
+        chunk_index = metadata.get("chunk_index")
+        if doc_id is not None and chunk_index is not None:
+            return f"doc:{doc_id}:chunk:{chunk_index}"
+        return f"content:{ctx.content[:120]}"
 
     async def _entity_linking(self, query: str) -> list[str]:
         messages = [

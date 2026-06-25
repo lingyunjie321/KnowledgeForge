@@ -114,6 +114,59 @@ async def test_subgraph_search_builds_content(mock_llm):
     assert "WORKS_AT" in contexts[0].content
 
 
+async def test_retrieve_uses_vector_queries_and_deduplicates(mock_llm, fake_llm_response):
+    mock_vs = MagicMock()
+    mock_vs.search = AsyncMock(side_effect=[
+        [
+            ({"content": "张三是工程师", "metadata": {"doc_id": "doc1", "chunk_id": "c1"}}, 0.9),
+            ({"content": "ACME 是科技公司", "metadata": {"doc_id": "doc1", "chunk_id": "c2"}}, 0.8),
+        ],
+        [
+            ({"content": "张三是工程师", "metadata": {"doc_id": "doc1", "chunk_id": "c1"}}, 0.95),
+            ({"content": "张三负责 GraphRAG", "metadata": {"doc_id": "doc2", "chunk_id": "c3"}}, 0.7),
+        ],
+    ])
+    mock_kg = MagicMock()
+    mock_kg.get_neighbors = AsyncMock(return_value=[])
+    mock_kg.execute_cypher = AsyncMock(return_value=[])
+    mock_llm.ainvoke.return_value = fake_llm_response('{"entities": []}')
+
+    pipeline = GraphRAGPipeline(vector_store=mock_vs, knowledge_graph=mock_kg)
+    results = await pipeline.retrieve(
+        "张三在哪工作",
+        top_k=10,
+        vector_queries=["张三 工作", "ACME 张三"],
+    )
+
+    searched = [call.args[0] for call in mock_vs.search.await_args_list]
+    assert searched == ["张三 工作", "ACME 张三"]
+    assert [r.content for r in results].count("张三是工程师") == 1
+    assert {r.metadata["chunk_id"] for r in results} == {"c1", "c2", "c3"}
+
+
+async def test_retrieve_merges_entities_hint_with_entity_linking(mock_llm, fake_llm_response):
+    mock_vs = MagicMock()
+    mock_vs.search = AsyncMock(return_value=[])
+    mock_kg = MagicMock()
+    mock_kg.get_neighbors = AsyncMock(return_value=[])
+    mock_kg.execute_cypher = AsyncMock(return_value=[])
+    mock_llm.ainvoke.return_value = fake_llm_response('{"entities": ["ACME", "张三"]}')
+
+    steps = []
+    pipeline = GraphRAGPipeline(vector_store=mock_vs, knowledge_graph=mock_kg)
+    await pipeline.retrieve(
+        "张三在哪工作",
+        top_k=5,
+        steps=steps,
+        entities_hint=["张三"],
+    )
+
+    entity_step = next(step for step in steps if step.name == "entity_linking")
+    assert entity_step.hits == 2
+    assert entity_step.detail == "张三、ACME"
+    assert mock_kg.get_neighbors.await_count == 2
+
+
 async def test_retrieve_full_flow_merges_and_reranks(mock_llm, fake_llm_response, deterministic_embeddings):
     # vector_store 返回向量结果；llm 返回实体链接；kg 返回子图和路径
     mock_vs = MagicMock()

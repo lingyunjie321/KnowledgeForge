@@ -102,12 +102,18 @@ class QAAgent:
 
     async def answer(self, question: str) -> QAResult:
         intent = await self._classify_intent(question)
-        await self._rewrite_query(question)
+        rewritten = await self._rewrite_query(question)
+        vector_queries = self._rewrite_items(rewritten, "queries") or [question]
+        entities_hint = self._rewrite_items(rewritten, "entities")
 
         contexts: list[RetrievedContext] = []
         if self.graph_rag is not None:
             # 检索全部委托给 GraphRAG 6 步管道
-            rag_contexts = await self.graph_rag.retrieve(question)
+            rag_contexts = await self.graph_rag.retrieve(
+                question,
+                vector_queries=vector_queries,
+                entities_hint=entities_hint,
+            )
             contexts = [
                 RetrievedContext(
                     content=c.content,
@@ -134,14 +140,21 @@ class QAAgent:
     async def answer_stream(self, question: str) -> AsyncIterator[dict[str, Any]]:
         """流式问答：先发 meta（意图/来源/检索步），再逐 token 发答案，最后发 done"""
         intent = await self._classify_intent(question)
-        await self._rewrite_query(question)
+        rewritten = await self._rewrite_query(question)
+        vector_queries = self._rewrite_items(rewritten, "queries") or [question]
+        entities_hint = self._rewrite_items(rewritten, "entities")
 
         contexts: list[RetrievedContext] = []
         retrieve_steps: list[dict[str, Any]] = []
         if self.graph_rag is not None:
             from services.graph_rag import RetrieveStep
             steps: list[RetrieveStep] = []
-            rag_contexts = await self.graph_rag.retrieve(question, steps=steps)
+            rag_contexts = await self.graph_rag.retrieve(
+                question,
+                steps=steps,
+                vector_queries=vector_queries,
+                entities_hint=entities_hint,
+            )
             contexts = [
                 RetrievedContext(
                     content=c.content,
@@ -212,6 +225,23 @@ class QAAgent:
             return json.loads(cleaned)
         except (json.JSONDecodeError, IndexError):
             return {"queries": [question], "entities": [], "keywords": []}
+
+    @staticmethod
+    def _rewrite_items(rewritten: dict, key: str) -> list[str]:
+        raw = rewritten.get(key, []) if isinstance(rewritten, dict) else []
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list):
+            return []
+
+        items: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            text = str(item).strip()
+            if text and text not in seen:
+                seen.add(text)
+                items.append(text)
+        return items
 
     def _build_answer_messages(
         self,

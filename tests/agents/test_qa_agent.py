@@ -79,6 +79,25 @@ async def test_answer_full_flow_with_mock_graph_rag(mock_llm, fake_llm_response)
     assert mock_rag.retrieve.await_count == 1
 
 
+async def test_answer_passes_rewrite_result_to_graph_rag(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("factoid"),
+        fake_llm_response('{"queries": ["张三 工作", "ACME 张三"], "entities": ["张三", "ACME"], "keywords": []}'),
+        fake_llm_response("答案"),
+    ]
+    mock_rag = MagicMock()
+    mock_rag.retrieve = AsyncMock(return_value=[])
+
+    agent = QAAgent(graph_rag=mock_rag)
+    await agent.answer("张三在哪工作")
+
+    mock_rag.retrieve.assert_awaited_once()
+    call = mock_rag.retrieve.await_args
+    assert call.args[0] == "张三在哪工作"
+    assert call.kwargs["vector_queries"] == ["张三 工作", "ACME 张三"]
+    assert call.kwargs["entities_hint"] == ["张三", "ACME"]
+
+
 async def test_answer_no_graph_rag_yields_empty_contexts(mock_llm, fake_llm_response):
     mock_llm.ainvoke.side_effect = [
         fake_llm_response("factoid"),
@@ -135,6 +154,25 @@ async def test_answer_stream_yields_meta_then_tokens_then_done(mock_llm, fake_ll
 
     assert events[-1]["type"] == "done"
     assert events[-1]["reasoning_steps"][-1] == "答案生成完成"
+
+
+async def test_answer_stream_passes_rewrite_result_to_graph_rag(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("analytical"),
+        fake_llm_response('{"queries": ["GraphRAG 流程"], "entities": ["GraphRAG"], "keywords": []}'),
+    ]
+    mock_llm.astream_text = "答案"
+    mock_rag = MagicMock()
+    mock_rag.retrieve = AsyncMock(return_value=[])
+    agent = QAAgent(graph_rag=mock_rag)
+
+    events = [e async for e in agent.answer_stream("GraphRAG 怎么检索")]
+
+    assert events[-1]["type"] == "done"
+    call = mock_rag.retrieve.await_args
+    assert call.args[0] == "GraphRAG 怎么检索"
+    assert call.kwargs["vector_queries"] == ["GraphRAG 流程"]
+    assert call.kwargs["entities_hint"] == ["GraphRAG"]
 
 
 async def test_answer_stream_empty_knowledge_base(mock_llm, fake_llm_response):
