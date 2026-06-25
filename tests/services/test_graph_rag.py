@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -218,3 +219,102 @@ async def test_retrieve_empty_when_no_vector_results_and_no_entities(mock_llm, f
     results = await pipeline.retrieve("空查询", top_k=5)
     # 无实体→无子图/路径/社区，只剩可能的 vector（空），结果为空
     assert results == []
+
+
+async def test_retrieve_runs_vector_and_entity_linking_concurrently(mock_llm):
+    pipeline = GraphRAGPipeline(vector_store=MagicMock(), knowledge_graph=MagicMock())
+    started: set[str] = set()
+    both_started = asyncio.Event()
+
+    async def wait_for_peer(name: str):
+        started.add(name)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+
+    async def vector_search_many(_queries, top_k=5):
+        await wait_for_peer("vector")
+        return []
+
+    async def entity_linking(_query):
+        await wait_for_peer("entity")
+        return []
+
+    pipeline._vector_search_many = vector_search_many  # type: ignore[method-assign]
+    pipeline._entity_linking = entity_linking  # type: ignore[method-assign]
+    pipeline._subgraph_search = AsyncMock(return_value=[])
+    pipeline._path_search = AsyncMock(return_value=[])
+
+    await pipeline.retrieve("问题")
+
+    assert started == {"vector", "entity"}
+
+
+async def test_retrieve_runs_subgraph_and_path_concurrently(mock_llm):
+    pipeline = GraphRAGPipeline(vector_store=MagicMock(), knowledge_graph=MagicMock())
+    pipeline._vector_search_many = AsyncMock(return_value=[])
+    pipeline._entity_linking = AsyncMock(return_value=["张三", "李四"])
+    started: set[str] = set()
+    both_started = asyncio.Event()
+
+    async def wait_for_peer(name: str):
+        started.add(name)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+
+    async def subgraph_search(_entities):
+        await wait_for_peer("subgraph")
+        return []
+
+    async def path_search(_entities):
+        await wait_for_peer("path")
+        return []
+
+    pipeline._subgraph_search = subgraph_search  # type: ignore[method-assign]
+    pipeline._path_search = path_search  # type: ignore[method-assign]
+
+    await pipeline.retrieve("问题")
+
+    assert started == {"subgraph", "path"}
+
+
+async def test_subgraph_search_queries_entities_concurrently(mock_llm):
+    mock_kg = MagicMock()
+    started: set[str] = set()
+    both_started = asyncio.Event()
+
+    async def get_neighbors(entity_name: str, hops: int = 2):
+        started.add(entity_name)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+        return []
+
+    mock_kg.get_neighbors = get_neighbors
+    pipeline = GraphRAGPipeline(vector_store=MagicMock(), knowledge_graph=mock_kg)
+
+    await pipeline._subgraph_search(["张三", "李四"])
+
+    assert started == {"张三", "李四"}
+
+
+async def test_path_search_queries_pairs_concurrently(mock_llm):
+    mock_kg = MagicMock()
+    active = 0
+    max_active = 0
+
+    async def execute_cypher(_cypher: str, params: dict):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return []
+
+    mock_kg.execute_cypher = execute_cypher
+    pipeline = GraphRAGPipeline(vector_store=MagicMock(), knowledge_graph=mock_kg)
+
+    await pipeline._path_search(["张三", "李四", "ACME"])
+
+    assert max_active >= 2

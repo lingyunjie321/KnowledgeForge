@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -89,37 +90,38 @@ class GraphRAGPipeline:
     ) -> list[GraphRAGContext]:
         steps = steps if steps is not None else []
 
-        t0 = time.perf_counter()
         search_queries = self._merge_unique(vector_queries or [query])
-        vector_results = await self._vector_search_many(search_queries, top_k=top_k)
+        (vector_results, vector_ms), (linked_entities, entity_ms) = await asyncio.gather(
+            self._timed(self._vector_search_many(search_queries, top_k=top_k)),
+            self._timed(self._entity_linking(query)),
+        )
         steps.append(RetrieveStep(
             name="vector", label=_SIX_STEP_LABELS["vector"],
-            hits=len(vector_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+            hits=len(vector_results), cost_ms=vector_ms,
         ))
 
-        t0 = time.perf_counter()
         entities = self._merge_unique([
             *(entities_hint or []),
-            *(await self._entity_linking(query)),
+            *linked_entities,
         ])
         steps.append(RetrieveStep(
             name="entity_linking", label=_SIX_STEP_LABELS["entity_linking"],
-            hits=len(entities), cost_ms=int((time.perf_counter() - t0) * 1000),
+            hits=len(entities), cost_ms=entity_ms,
             detail="、".join(entities[:5]),
         ))
 
-        t0 = time.perf_counter()
-        subgraph_results = await self._subgraph_search(entities)
+        (subgraph_results, subgraph_ms), (path_results, path_ms) = await asyncio.gather(
+            self._timed(self._subgraph_search(entities)),
+            self._timed(self._path_search(entities)),
+        )
         steps.append(RetrieveStep(
             name="subgraph", label=_SIX_STEP_LABELS["subgraph"],
-            hits=len(subgraph_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+            hits=len(subgraph_results), cost_ms=subgraph_ms,
         ))
 
-        t0 = time.perf_counter()
-        path_results = await self._path_search(entities)
         steps.append(RetrieveStep(
             name="path", label=_SIX_STEP_LABELS["path"],
-            hits=len(path_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+            hits=len(path_results), cost_ms=path_ms,
         ))
 
         all_results = vector_results + subgraph_results + path_results
@@ -143,6 +145,11 @@ class GraphRAGPipeline:
         ))
 
         return reranked[:top_k]
+
+    async def _timed(self, awaitable) -> tuple[Any, int]:
+        t0 = time.perf_counter()
+        result = await awaitable
+        return result, int((time.perf_counter() - t0) * 1000)
 
     async def _vector_search_many(self, queries: list[str], top_k: int = 5) -> list[GraphRAGContext]:
         contexts: list[GraphRAGContext] = []
@@ -217,77 +224,91 @@ class GraphRAGPipeline:
             return []
 
     async def _subgraph_search(self, entities: list[str], hops: int = 2) -> list[GraphRAGContext]:
+        results = await asyncio.gather(*[
+            self._subgraph_for_entity(entity_name, hops)
+            for entity_name in entities
+        ])
+        return [ctx for group in results for ctx in group]
+
+    async def _subgraph_for_entity(self, entity_name: str, hops: int) -> list[GraphRAGContext]:
         contexts: list[GraphRAGContext] = []
-        for entity_name in entities:
-            neighbors = await self.knowledge_graph.get_neighbors(entity_name, hops=hops)
-            for record in neighbors:
-                source_docs = self._record_sources(record)
-                metadata = {"entity": entity_name, "hops": hops, "source_docs": source_docs}
-                if source_docs:
-                    metadata["source"] = source_docs[0]
-                content = (
-                    f"{record.get('source', '')} "
-                    f"--[{', '.join(record.get('relations', []))}]--> "
-                    f"{record.get('target', '')} "
-                    f"({record.get('target_type', '')}): "
-                    f"{record.get('target_desc', '')}"
-                )
-                contexts.append(GraphRAGContext(
-                    content=content,
-                    source_type="subgraph",
-                    score=0.75,
-                    metadata=metadata,
-                ))
+        neighbors = await self.knowledge_graph.get_neighbors(entity_name, hops=hops)
+        for record in neighbors:
+            source_docs = self._record_sources(record)
+            metadata = {"entity": entity_name, "hops": hops, "source_docs": source_docs}
+            if source_docs:
+                metadata["source"] = source_docs[0]
+            content = (
+                f"{record.get('source', '')} "
+                f"--[{', '.join(record.get('relations', []))}]--> "
+                f"{record.get('target', '')} "
+                f"({record.get('target_type', '')}): "
+                f"{record.get('target_desc', '')}"
+            )
+            contexts.append(GraphRAGContext(
+                content=content,
+                source_type="subgraph",
+                score=0.75,
+                metadata=metadata,
+            ))
         return contexts
 
     async def _path_search(self, entities: list[str]) -> list[GraphRAGContext]:
         if len(entities) < 2:
             return []
 
+        pairs = [
+            (entities[i], entities[j])
+            for i in range(len(entities))
+            for j in range(i + 1, min(i + 3, len(entities)))
+        ]
+        results = await asyncio.gather(*[
+            self._path_between(name_a, name_b)
+            for name_a, name_b in pairs
+        ])
+        return [ctx for group in results for ctx in group]
+
+    async def _path_between(self, name_a: str, name_b: str) -> list[GraphRAGContext]:
         contexts: list[GraphRAGContext] = []
-        for i in range(len(entities)):
-            for j in range(i + 1, min(i + 3, len(entities))):
-                # 参数化查询，避免 Cypher 注入
-                cypher = """
-                MATCH path = shortestPath(
-                    (a:Entity {name: $name_a})-[*..5]-(b:Entity {name: $name_b})
-                )
-                RETURN
-                    [n IN nodes(path) | n.name] AS node_names,
-                    [r IN relationships(path) | type(r)] AS rel_types,
-                    [r IN relationships(path) | r.source] AS source_docs
-                LIMIT 3
-                """
-                try:
-                    records = await self.knowledge_graph.execute_cypher(
-                        cypher, {"name_a": entities[i], "name_b": entities[j]}
-                    )
-                    for rec in records:
-                        nodes = rec.get("node_names", [])
-                        rels = rec.get("rel_types", [])
-                        path_str = ""
-                        for k, node in enumerate(nodes):
-                            path_str += node
-                            if k < len(rels):
-                                path_str += f" --[{rels[k]}]--> "
-                        source_docs = self._record_sources(rec)
-                        metadata = {
-                            "from": entities[i],
-                            "to": entities[j],
-                            "path": nodes,
-                            "source_docs": source_docs,
-                        }
-                        if source_docs:
-                            metadata["source"] = source_docs[0]
-                        contexts.append(GraphRAGContext(
-                            content=f"推理路径: {path_str}",
-                            source_type="path",
-                            score=0.85,
-                            metadata=metadata,
-                        ))
-                except Exception:
-                    logger.exception("路径检索失败: %s → %s", entities[i], entities[j])
-                    continue
+        cypher = """
+        MATCH path = shortestPath(
+            (a:Entity {name: $name_a})-[*..5]-(b:Entity {name: $name_b})
+        )
+        RETURN
+            [n IN nodes(path) | n.name] AS node_names,
+            [r IN relationships(path) | type(r)] AS rel_types,
+            [r IN relationships(path) | r.source] AS source_docs
+        LIMIT 3
+        """
+        try:
+            records = await self.knowledge_graph.execute_cypher(
+                cypher, {"name_a": name_a, "name_b": name_b}
+            )
+            for rec in records:
+                nodes = rec.get("node_names", [])
+                rels = rec.get("rel_types", [])
+                path_str = ""
+                for k, node in enumerate(nodes):
+                    path_str += node
+                    if k < len(rels):
+                        path_str += f" --[{rels[k]}]--> "
+                source_docs = self._record_sources(rec)
+                metadata = {
+                    "from": name_a,
+                    "to": name_b,
+                    "path": nodes,
+                    "source_docs": source_docs,
+                }
+                if source_docs:
+                    metadata["source"] = source_docs[0]
+                contexts.append(GraphRAGContext(
+                    content=f"推理路径: {path_str}",
+                    source_type="path",
+                    score=0.85,
+                    metadata=metadata,
+                ))
+        except Exception:
+            logger.exception("路径检索失败: %s → %s", name_a, name_b)
         return contexts
 
     async def _community_summary(self, subgraph_results: list[GraphRAGContext]) -> GraphRAGContext:
