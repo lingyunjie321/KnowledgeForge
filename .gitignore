@@ -20,6 +20,12 @@ dist/
 pip-wheel-metadata/
 .python-version
 
+# 前端依赖
+node_modules/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
 # ── 测试与覆盖率 ──
 .pytest_cache/
 .coverage

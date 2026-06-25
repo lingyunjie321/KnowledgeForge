@@ -153,3 +153,25 @@ class KnowledgeGraphService:
             "total_entities": entity_count[0]["cnt"] if entity_count else 0,
             "total_relations": rel_count[0]["cnt"] if rel_count else 0,
         }
+
+    async def list_entities(self, limit: int = 200, offset: int = 0) -> list[dict]:
+        """分页查实体，给图谱可视化用"""
+        cypher = """
+        MATCH (e:Entity)
+        RETURN e.name AS name, e.type AS type, e.description AS description,
+               e.source AS source, e.version AS version
+        ORDER BY e.updated_at DESC
+        SKIP $skip LIMIT $limit
+        """
+        return await self.execute_cypher(cypher, {"skip": offset, "limit": limit})
+
+    async def list_relations(self, limit: int = 400, offset: int = 0) -> list[dict]:
+        """分页查关系，给图谱可视化用"""
+        cypher = """
+        MATCH (h:Entity)-[r]->(t:Entity)
+        RETURN h.name AS source, type(r) AS relation, t.name AS target,
+               r.confidence AS confidence, r.source AS source_doc
+        ORDER BY r.updated_at DESC
+        SKIP $skip LIMIT $limit
+        """
+        return await self.execute_cypher(cypher, {"skip": offset, "limit": limit})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,26 @@ class GraphRAGContext:
     score: float
     doc_type: str = DocType.TEXT.value
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RetrieveStep:
+    """6 步管道的单步执行记录，给前端时间线渲染用"""
+    name: str          # vector / entity_linking / subgraph / path / community / rerank
+    label: str         # 中文标签
+    hits: int = 0      # 该步命中的上下文条数
+    cost_ms: int = 0   # 该步耗时
+    detail: str = ""   # 可选细节，如命中的实体名
+
+
+_SIX_STEP_LABELS = {
+    "vector": "向量检索",
+    "entity_linking": "实体链接",
+    "subgraph": "子图遍历",
+    "path": "路径推理",
+    "community": "社区摘要",
+    "rerank": "交叉重排",
+}
 
 
 ENTITY_LINKING_PROMPT = """\
@@ -58,19 +79,63 @@ class GraphRAGPipeline:
             temperature=0,
         )
 
-    async def retrieve(self, query: str, top_k: int = 10) -> list[GraphRAGContext]:
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 10,
+        steps: list[RetrieveStep] | None = None,
+    ) -> list[GraphRAGContext]:
+        steps = steps if steps is not None else []
+
+        t0 = time.perf_counter()
         vector_results = await self._vector_search(query, top_k=top_k)
+        steps.append(RetrieveStep(
+            name="vector", label=_SIX_STEP_LABELS["vector"],
+            hits=len(vector_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+        ))
+
+        t0 = time.perf_counter()
         entities = await self._entity_linking(query)
+        steps.append(RetrieveStep(
+            name="entity_linking", label=_SIX_STEP_LABELS["entity_linking"],
+            hits=len(entities), cost_ms=int((time.perf_counter() - t0) * 1000),
+            detail="、".join(entities[:5]),
+        ))
+
+        t0 = time.perf_counter()
         subgraph_results = await self._subgraph_search(entities)
+        steps.append(RetrieveStep(
+            name="subgraph", label=_SIX_STEP_LABELS["subgraph"],
+            hits=len(subgraph_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+        ))
+
+        t0 = time.perf_counter()
         path_results = await self._path_search(entities)
+        steps.append(RetrieveStep(
+            name="path", label=_SIX_STEP_LABELS["path"],
+            hits=len(path_results), cost_ms=int((time.perf_counter() - t0) * 1000),
+        ))
 
         all_results = vector_results + subgraph_results + path_results
 
+        t0 = time.perf_counter()
+        community_hits = 0
         if subgraph_results:
             community_ctx = await self._community_summary(subgraph_results)
             all_results.append(community_ctx)
+            community_hits = 1
+        steps.append(RetrieveStep(
+            name="community", label=_SIX_STEP_LABELS["community"],
+            hits=community_hits, cost_ms=int((time.perf_counter() - t0) * 1000),
+        ))
 
+        t0 = time.perf_counter()
         reranked = self._cross_rerank(all_results, query)
+        steps.append(RetrieveStep(
+            name="rerank", label=_SIX_STEP_LABELS["rerank"],
+            hits=len(reranked), cost_ms=int((time.perf_counter() - t0) * 1000),
+        ))
+
         return reranked[:top_k]
 
     async def _vector_search(self, query: str, top_k: int = 5) -> list[GraphRAGContext]:

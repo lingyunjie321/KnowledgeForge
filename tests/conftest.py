@@ -32,15 +32,36 @@ class FakeLLMResponse:
         self.content = content
 
 
+class FakeLLMChunk:
+    """模拟 LangChain astream 产出的 chunk，只有 .content"""
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
 @pytest.fixture
 def fake_llm_response() -> type:
     return FakeLLMResponse
 
 
 @pytest.fixture
+def fake_llm_chunk() -> type:
+    return FakeLLMChunk
+
+
+@pytest.fixture
 def mock_llm(monkeypatch) -> MagicMock:
     instance = MagicMock(name="FakeChatOpenAI")
     instance.ainvoke = AsyncMock()
+    instance.astream_text = ""
+
+    async def _fake_astream(messages, *_a, **_kw):
+        if instance.astream_text:
+            yield FakeLLMChunk(instance.astream_text)
+            instance.astream_text = ""
+        else:
+            yield FakeLLMChunk("")
+
+    instance.astream = _fake_astream
     for mod_path in _LLM_MODULES:
         mod = importlib.import_module(mod_path)
         monkeypatch.setattr(mod, "ChatOpenAI", lambda *a, **kw: instance)

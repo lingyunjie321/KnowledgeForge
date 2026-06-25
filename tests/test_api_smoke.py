@@ -66,3 +66,34 @@ def test_root_serves_frontend():
     with TestClient(app) as client:
         resp = client.get("/")
         assert resp.status_code == 200
+
+
+def test_graph_data_returns_available_flag():
+    with TestClient(app) as client:
+        resp = client.get("/api/graph/data")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "entities" in body
+        assert "relations" in body
+        assert "available" in body
+        # 测试环境无 Neo4j，应降级返回 available=false
+        assert body["available"] is False
+        assert body["entities"] == []
+
+
+def test_ask_stream_returns_sse(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("factoid"),
+        fake_llm_response('{"queries": ["q"], "entities": [], "keywords": []}'),
+        fake_llm_response('{"entities": []}'),
+    ]
+    mock_llm.astream_text = "流式答案文本"
+    with TestClient(app) as client:
+        resp = client.post("/api/qa/ask_stream", json={"question": "测试"})
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        body = resp.text
+        assert "event: meta" in body
+        assert "event: token" in body
+        assert "流式答案文本" in body
+        assert "event: done" in body

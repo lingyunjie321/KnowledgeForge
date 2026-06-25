@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -9,6 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -65,7 +67,6 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 async def serve_frontend():
-    from fastapi.responses import FileResponse
     return FileResponse(os.path.join(static_dir, "index.html"))
 
 
@@ -175,6 +176,28 @@ async def ask_question(req: QuestionRequest):
     )
 
 
+@app.post("/api/qa/ask_stream", tags=["智能问答"])
+async def ask_question_stream(req: QuestionRequest):
+    """SSE 流式问答：meta 事件推意图/来源/检索步，token 事件逐字推答案，done 事件收尾"""
+    qa_agent = workflows.get("qa_agent")
+    if qa_agent is None:
+        raise HTTPException(status_code=503, detail="QA agent not initialized")
+
+    async def event_gen():
+        try:
+            async for evt in qa_agent.answer_stream(req.question):
+                yield f"event: {evt['type']}\ndata: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.exception("SSE 流式问答失败")
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/admin/stats", response_model=StatsResponse, tags=["系统管理"])
 async def get_stats():
     try:
@@ -188,6 +211,26 @@ async def get_stats():
         logger.exception("获取图谱统计失败")
         kg_stats = {"total_entities": 0, "total_relations": 0}
     return StatsResponse(vector_store=vs_stats, knowledge_graph=kg_stats)
+
+
+class GraphDataResponse(BaseModel):
+    entities: list[dict[str, Any]]
+    relations: list[dict[str, Any]]
+    available: bool
+
+
+@app.get("/api/graph/data", response_model=GraphDataResponse, tags=["知识图谱"])
+async def get_graph_data(limit: int = 200):
+    """查实体+关系给前端图谱可视化，Neo4j 不可用时 available=False"""
+    if not knowledge_graph.is_connected:
+        return GraphDataResponse(entities=[], relations=[], available=False)
+    try:
+        entities = await knowledge_graph.list_entities(limit=limit)
+        relations = await knowledge_graph.list_relations(limit=limit * 2)
+        return GraphDataResponse(entities=entities, relations=relations, available=True)
+    except Exception:
+        logger.exception("查图谱数据失败")
+        return GraphDataResponse(entities=[], relations=[], available=False)
 
 
 @app.post("/api/admin/update", response_model=UpdateResponse, tags=["系统管理"])

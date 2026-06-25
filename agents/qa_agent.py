@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -101,7 +102,7 @@ class QAAgent:
 
     async def answer(self, question: str) -> QAResult:
         intent = await self._classify_intent(question)
-        rewritten = await self._rewrite_query(question)
+        await self._rewrite_query(question)
 
         contexts: list[RetrievedContext] = []
         if self.graph_rag is not None:
@@ -130,6 +131,62 @@ class QAAgent:
             reasoning_steps=reasoning,
         )
 
+    async def answer_stream(self, question: str) -> AsyncIterator[dict[str, Any]]:
+        """流式问答：先发 meta（意图/来源/检索步），再逐 token 发答案，最后发 done"""
+        intent = await self._classify_intent(question)
+        await self._rewrite_query(question)
+
+        contexts: list[RetrievedContext] = []
+        retrieve_steps: list[dict[str, Any]] = []
+        if self.graph_rag is not None:
+            from services.graph_rag import RetrieveStep
+            steps: list[RetrieveStep] = []
+            rag_contexts = await self.graph_rag.retrieve(question, steps=steps)
+            contexts = [
+                RetrievedContext(
+                    content=c.content,
+                    source=c.source_type,
+                    score=c.score,
+                    retrieval_type=c.source_type,
+                    metadata=c.metadata,
+                )
+                for c in rag_contexts
+            ]
+            retrieve_steps = [
+                {"name": s.name, "label": s.label, "hits": s.hits, "cost_ms": s.cost_ms, "detail": s.detail}
+                for s in steps
+            ]
+        top_contexts = contexts[:8]
+
+        reasoning_pre = [
+            f"识别问题意图: {intent.value}",
+            f"GraphRAG 检索到 {len(contexts)} 条上下文",
+        ]
+
+        yield {
+            "type": "meta",
+            "intent": intent.value,
+            "confidence": self._calc_confidence(top_contexts),
+            "reasoning_steps": reasoning_pre,
+            "retrieve_steps": retrieve_steps,
+            "sources": [
+                {"content": c.content[:200], "source": c.source, "score": c.score, "type": c.retrieval_type}
+                for c in top_contexts
+            ],
+        }
+
+        messages, _ = self._build_answer_messages(question, top_contexts, intent)
+        try:
+            async for chunk in self.llm.astream(messages):
+                if chunk.content:
+                    yield {"type": "token", "content": chunk.content}
+        except Exception:
+            logger.exception("流式生成答案失败")
+            yield {"type": "error", "message": "答案生成失败"}
+            return
+
+        yield {"type": "done", "reasoning_steps": reasoning_pre + ["答案生成完成"]}
+
     async def _classify_intent(self, question: str) -> QueryIntent:
         messages = [
             SystemMessage(content=INTENT_PROMPT),
@@ -156,12 +213,12 @@ class QAAgent:
         except (json.JSONDecodeError, IndexError):
             return {"queries": [question], "entities": [], "keywords": []}
 
-    async def _generate_answer(
+    def _build_answer_messages(
         self,
         question: str,
         contexts: list[RetrievedContext],
         intent: QueryIntent,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[list, list[str]]:
         context_text = "\n\n".join(
             f"[来源 {i+1}: {c.source} | 类型: {c.retrieval_type} | 分数: {c.score:.2f}]\n{c.content}"
             for i, c in enumerate(contexts)
@@ -186,6 +243,15 @@ class QAAgent:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
+        return messages, reasoning_steps
+
+    async def _generate_answer(
+        self,
+        question: str,
+        contexts: list[RetrievedContext],
+        intent: QueryIntent,
+    ) -> tuple[str, list[str]]:
+        messages, reasoning_steps = self._build_answer_messages(question, contexts, intent)
         resp = await self.llm.ainvoke(messages)
         reasoning_steps.append("答案生成完成")
         return resp.content, reasoning_steps

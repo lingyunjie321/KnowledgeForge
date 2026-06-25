@@ -15,10 +15,10 @@ def test_build_workflow_returns_three_graphs(mock_llm, fake_vector_store, fake_k
         vector_store=fake_vector_store,
         knowledge_graph=fake_knowledge_graph,
     )
-    assert set(workflows.keys()) == {"ingest", "qa", "update"}
-    # 每条都是编译后的可执行图
-    for name, graph in workflows.items():
-        assert graph is not None, f"{name} 流水线未构建"
+    assert set(workflows.keys()) == {"ingest", "qa", "update", "qa_agent"}
+    for name in ("ingest", "qa", "update"):
+        assert workflows[name] is not None, f"{name} 流水线未构建"
+    assert workflows["qa_agent"] is not None
 
 
 async def test_qa_workflow_runs_with_mock_agent():

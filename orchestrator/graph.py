@@ -34,7 +34,7 @@ def build_knowledge_graph_workflow(
     vector_store: VectorStoreService | None = None,
     knowledge_graph: KnowledgeGraphService | None = None,
 ) -> dict[str, Any]:
-    """构建三条流水线，返回 {"ingest": graph, "qa": graph, "update": graph}"""
+    """构建三条流水线，返回 {"ingest": graph, "qa": graph, "update": graph, "qa_agent": agent}"""
     doc_parser = DocParserAgent()
     extractor = KnowledgeExtractAgent()
     qa_agent = QAAgent(vector_store=vector_store, knowledge_graph=knowledge_graph)
@@ -49,6 +49,7 @@ def build_knowledge_graph_workflow(
         "ingest": _build_ingest_graph(doc_parser, extractor, vector_store, knowledge_graph),
         "qa": _build_qa_graph(qa_agent),
         "update": _build_update_graph(update_agent),
+        "qa_agent": qa_agent,
     }
 
 

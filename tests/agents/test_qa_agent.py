@@ -105,3 +105,50 @@ async def test_answer_truncates_to_top_eight(mock_llm, fake_llm_response):
     agent = QAAgent(graph_rag=mock_rag)
     result = await agent.answer("q")
     assert len(result.contexts) == 8
+
+
+async def test_answer_stream_yields_meta_then_tokens_then_done(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("analytical"),
+        fake_llm_response('{"queries": ["q"], "entities": [], "keywords": []}'),
+    ]
+    mock_llm.astream_text = "流式答案"
+    mock_rag = MagicMock()
+    mock_rag.retrieve = AsyncMock(return_value=[
+        GraphRAGContext(content="命中", source_type="vector", score=0.9),
+    ])
+    agent = QAAgent(graph_rag=mock_rag)
+
+    events = []
+    async for evt in agent.answer_stream("为什么"):
+        events.append(evt)
+
+    assert events[0]["type"] == "meta"
+    assert events[0]["intent"] == "analytical"
+    assert events[0]["confidence"] > 0
+    assert len(events[0]["sources"]) == 1
+    assert "识别问题意图" in events[0]["reasoning_steps"][0]
+
+    token_events = [e for e in events if e["type"] == "token"]
+    assert len(token_events) == 1
+    assert token_events[0]["content"] == "流式答案"
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["reasoning_steps"][-1] == "答案生成完成"
+
+
+async def test_answer_stream_empty_knowledge_base(mock_llm, fake_llm_response):
+    mock_llm.ainvoke.side_effect = [
+        fake_llm_response("factoid"),
+        fake_llm_response('{"queries": ["q"], "entities": [], "keywords": []}'),
+    ]
+    mock_llm.astream_text = "空库兜底"
+    agent = QAAgent()
+
+    events = [e async for e in agent.answer_stream("任意")]
+
+    assert events[0]["type"] == "meta"
+    assert events[0]["confidence"] == 0.0
+    assert events[0]["sources"] == []
+    token_events = [e for e in events if e["type"] == "token"]
+    assert token_events[0]["content"] == "空库兜底"
