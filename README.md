@@ -182,8 +182,21 @@ BENCH_DOC_COUNT=100 python -m tests.bench.update_benchmark
 ## Docker
 
 ```bash
+cp .env.example .env
+# 填入 OPENAI_API_KEY；演示时可先保留 EMBEDDING_PROVIDER=disabled
+docker compose up --build
+```
+
+启动后访问（默认端口；如果 `.env` 改了 `API_PORT`，以实际映射端口为准）：
+
+- Web/API: `http://localhost:8080`
+- Neo4j Browser: `http://localhost:7474`
+
+Compose 会启动 Neo4j 5 和 API。ChromaDB 使用当前代码里的 embedded `PersistentClient`，数据挂载到宿主机 `./chroma_data`；上传文件挂载到 `./uploads`，方便演示后查看入库文件。
+
+只构建 API 镜像时也可以单独跑：
+
+```bash
 docker build -t knowledgeforge .
 docker run -p 8080:8080 --env-file .env knowledgeforge
 ```
-
-> 注意：容器内不自带 Neo4j / ChromaDB 服务端，需要单独部署或用 docker-compose 编排（后续补）。
